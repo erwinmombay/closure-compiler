@@ -59,6 +59,7 @@ import com.google.javascript.rhino.jstype.TemplateTypeReplacer;
 import com.google.javascript.rhino.jstype.TemplatizedType;
 import com.google.javascript.rhino.jstype.UnionType;
 import com.google.javascript.rhino.jstype.UnknownType;
+
 import java.io.Serializable;
 import java.text.MessageFormat;
 import java.util.ArrayList;
@@ -116,6 +117,18 @@ class TypeValidator implements Serializable {
   static final DiagnosticType INVALID_CAST =
       DiagnosticType.warning("JSC_INVALID_CAST",
           "invalid cast - must be a subtype or supertype\n"
+              + "from: {0}\n"
+              + "to  : {1}");
+
+  static final DiagnosticType REDUNDANT_JSONOBJECT_CAST =
+      DiagnosticType.warning("JSC_INVALID_CAST",
+          "invalid cast - redundant JsonObject cast to JsonObject.\n"
+              + "from: {0}\n"
+              + "to  : {1}");
+
+  static final DiagnosticType INVALID_JSONOBJECT_CAST =
+      DiagnosticType.warning("JSC_INVALID_CAST",
+          "invalid cast - JsonObject cannot be cast to another type and vice versa.\n"
               + "from: {0}\n"
               + "to  : {1}");
 
@@ -810,6 +823,10 @@ class TypeValidator implements Serializable {
     }
   }
 
+  boolean isNotAllowedCastForJsonType(JSType t) {
+    return !(t.toString().equals("JsonObject") || t.isDict());
+  }
+
   /**
    * Expect that the first type can be cast to the second type. The first type must have some
    * relationship with the second.
@@ -820,6 +837,21 @@ class TypeValidator implements Serializable {
    * @param sourceType The type being cast from.
    */
   void expectCanCast(Node n, JSType targetType, JSType sourceType) {
+    // Whitelist object.js as this should be the only file that can cast JsonObject by using its helper
+    // functions.
+    if (!n.getSourceFileName().equals("src/utils/object.js")) {
+      // Checks for redundant casting for JsonObject which seems to occur a lot.
+      if (sourceType.toString().equals("JsonObject") && targetType.toString().equals("JsonObject")) {
+        report(JSError.make(n, REDUNDANT_JSONOBJECT_CAST, sourceType.toString(), targetType.toString()));
+      // Checks for casting a JsonObject to any other type. This is dangerous as JsonObject is supposed
+      // to be a dict whose keys should always be preserved and never mangled.
+      } else if (sourceType.toString().equals("JsonObject") && isNotAllowedCastForJsonType(targetType)) {
+        report(JSError.make(n, INVALID_JSONOBJECT_CAST, sourceType.toString(), targetType.toString()));
+      } else if (targetType.toString().equals("JsonObject") && isNotAllowedCastForJsonType(sourceType)) {
+        report(JSError.make(n, INVALID_JSONOBJECT_CAST, sourceType.toString(), targetType.toString()));
+      }
+    }
+
     if (!sourceType.canCastTo(targetType)) {
       registerMismatch(
           sourceType,
